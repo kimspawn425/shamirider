@@ -23,25 +23,42 @@
   #hungerFill { height: 100%;
     background: linear-gradient(90deg, #ff5050 0%, #ffcb6b 50%, #6bff6b 100%);
     transition: width 0.15s; }
-  #hungerBar.hit { animation: hungerHit 0.5s ease-out; }
-  #hungerWrap.hit > span { animation: hungerLabel 0.5s ease-out; }
+  #hungerBar.hit  { animation: hungerHit  0.5s ease-out; }
+  #hungerBar.heal { animation: hungerHeal 0.5s ease-out; }
+  #hungerWrap.hit  > span { animation: hungerLabelHit  0.5s ease-out; }
+  #hungerWrap.heal > span { animation: hungerLabelHeal 0.5s ease-out; }
   @keyframes hungerHit {
     0%   { transform: scale(1);    box-shadow: none; border-color: #555; }
     20%  { transform: scale(1.25); box-shadow: 0 0 20px #ff3030, 0 0 30px #ff5050; border-color: #ff5050; }
     50%  { transform: scale(1.15); box-shadow: 0 0 15px #ff5050; border-color: #ff5050; }
     100% { transform: scale(1);    box-shadow: none; border-color: #555; }
   }
-  @keyframes hungerLabel {
+  @keyframes hungerHeal {
+    0%   { transform: scale(1);    box-shadow: none; border-color: #555; }
+    20%  { transform: scale(1.20); box-shadow: 0 0 20px #30ff70, 0 0 30px #6bff8a; border-color: #6bff8a; }
+    50%  { transform: scale(1.12); box-shadow: 0 0 15px #6bff8a; border-color: #6bff8a; }
+    100% { transform: scale(1);    box-shadow: none; border-color: #555; }
+  }
+  @keyframes hungerLabelHit {
     0%, 100% { color: #fff; transform: scale(1); }
     30%      { color: #ff5050; transform: scale(1.3); }
   }
+  @keyframes hungerLabelHeal {
+    0%, 100% { color: #fff; transform: scale(1); }
+    30%      { color: #6bff8a; transform: scale(1.25); }
+  }
   #hungerWrap > span { display: inline-block; transition: color 0.1s; }
   #floatLoss { position: relative; pointer-events: none; }
-  #floatLoss .loss {
+  #floatLoss .loss, #floatLoss .gain {
     position: absolute; right: 0; top: -22px;
-    color: #ff5050; font-weight: 800; font-size: 16px;
-    text-shadow: 0 0 8px rgba(255, 80, 80, 0.6);
+    font-weight: 800; font-size: 16px;
     animation: floatUp 0.7s ease-out forwards;
+  }
+  #floatLoss .loss {
+    color: #ff5050; text-shadow: 0 0 8px rgba(255, 80, 80, 0.6);
+  }
+  #floatLoss .gain {
+    color: #6bff8a; text-shadow: 0 0 8px rgba(107, 255, 138, 0.7);
   }
   @keyframes floatUp {
     0%   { opacity: 0; transform: translateY(0); }

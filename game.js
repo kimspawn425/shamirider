@@ -763,25 +763,30 @@ const MOUNT_GAIT = {
   }
 
   // ===== 충돌 처리 =====
+  // amount: 변화량 (양수 = 회복 표시, 음수 = 감소 표시)
+  // 기본 동작은 감소(crash 호환)
   function flashHungerBar(amount) {
     const bar = document.getElementById('hungerBar');
     const wrap = document.getElementById('hungerWrap');
     const float = document.getElementById('floatLoss');
+    const isGain = amount != null && amount > 0;
+    const display = amount != null ? Math.abs(amount) : 10;
     if (bar) {
-      bar.classList.remove('hit');
-      // reflow trick to restart animation
+      const cls = isGain ? 'heal' : 'hit';
+      bar.classList.remove('hit', 'heal');
       void bar.offsetWidth;
-      bar.classList.add('hit');
+      bar.classList.add(cls);
     }
     if (wrap) {
-      wrap.classList.remove('hit');
+      const cls = isGain ? 'heal' : 'hit';
+      wrap.classList.remove('hit', 'heal');
       void wrap.offsetWidth;
-      wrap.classList.add('hit');
+      wrap.classList.add(cls);
     }
     if (float) {
       const el = document.createElement('div');
-      el.className = 'loss';
-      el.textContent = '-' + (amount != null ? amount : 10);
+      el.className = isGain ? 'gain' : 'loss';
+      el.textContent = (isGain ? '+' : '-') + display;
       float.appendChild(el);
       setTimeout(() => el.remove(), 800);
     }
@@ -1004,7 +1009,10 @@ const MOUNT_GAIT = {
         const charBot = mount.y + MOUNT_H;
         if (charTop < f.y + f.h && charBot > f.y) {
           f.collected = true;
+          const before = world.hunger;
           world.hunger = Math.min(100, world.hunger + HUNGER_REFILL);
+          const actualGain = world.hunger - before; // 100을 넘지 않는 실제 회복량
+          flashHungerBar(actualGain > 0 ? actualGain : HUNGER_REFILL);
           world.score += 100;
           for (let i = 0; i < 12; i++) {
             particles.push({
