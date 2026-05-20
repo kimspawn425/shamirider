@@ -763,7 +763,7 @@ const MOUNT_GAIT = {
   }
 
   // ===== 충돌 처리 =====
-  function flashHungerBar() {
+  function flashHungerBar(amount) {
     const bar = document.getElementById('hungerBar');
     const wrap = document.getElementById('hungerWrap');
     const float = document.getElementById('floatLoss');
@@ -781,7 +781,7 @@ const MOUNT_GAIT = {
     if (float) {
       const el = document.createElement('div');
       el.className = 'loss';
-      el.textContent = '-10';
+      el.textContent = '-' + (amount != null ? amount : 10);
       float.appendChild(el);
       setTimeout(() => el.remove(), 800);
     }
@@ -826,23 +826,27 @@ const MOUNT_GAIT = {
     }
   }
 
-  function handleCrash(hit) {
+  // hit: 충돌 대상 (플랫폼 객체 또는 null)
+  // hungerPenalty: 배고픔 감소량 (기본 20, 보스는 50 전달)
+  function handleCrash(hit, hungerPenalty) {
+    if (hungerPenalty == null) hungerPenalty = 20;
     // CRASH 상태 진입: 스크롤 정지 + 흔들림 + CRASH! 표시
     world.state = 'crashing';
     world.crashTimer = 0.9;        // CRASH 상태 지속 시간 (초)
     world.shakeAmount = 14;        // 캐릭터 흔들림 진폭 (시간 따라 감쇠)
     world.speed = 0;               // 스크롤 즉시 정지
 
-    // 배고픔 -10 + 시각 효과
-    world.hunger = Math.max(0, world.hunger - 10);
-    flashHungerBar();
+    // 배고픔 차감 + 시각 효과
+    world.hunger = Math.max(0, world.hunger - hungerPenalty);
+    flashHungerBar(hungerPenalty);
     if (world.hunger <= 0) {
       triggerGameOver('배고픔으로 쓰러졌다…');
       return;
     }
 
-    // 충돌 먼지/파편
-    for (let i = 0; i < 14; i++) spawnDust(PLAYER_X, mount.y + MOUNT_H/2, 1, '#ff8a4a');
+    // 충돌 먼지/파편 (보스 충돌은 더 화려하게)
+    const burstCount = hungerPenalty >= 50 ? 26 : 14;
+    for (let i = 0; i < burstCount; i++) spawnDust(PLAYER_X, mount.y + MOUNT_H/2, 1, '#ff8a4a');
   }
 
   // ===== 메인 업데이트 =====
@@ -934,9 +938,9 @@ const MOUNT_GAIT = {
     updatePlatforms(dt);
     updateBosses(dt);
 
-    // 보스 충돌 → 일반 충돌(CRASH) 처리 (무적 시간 존중)
+    // 보스 충돌 → 일반 충돌(CRASH) 처리 + 배고픔 -50 (블록 충돌의 2.5배)
     if (world.invulnTimer <= 0 && checkBossCollision()) {
-      handleCrash(null);
+      handleCrash(null, 50);
       return;
     }
 
