@@ -836,9 +836,10 @@ const MOUNT_GAIT = {
     world.shakeAmount = 14;        // 캐릭터 흔들림 진폭 (시간 따라 감쇠)
     world.speed = 0;               // 스크롤 즉시 정지
 
-    // 배고픔 차감 + 시각 효과
+    // 배고픔 차감 + 시각 효과 (게이지 width와 펄스/플로팅을 동시에 표시)
     world.hunger = Math.max(0, world.hunger - hungerPenalty);
     flashHungerBar(hungerPenalty);
+    updateHUD();   // crashing 상태에선 update()의 끝 갱신이 안 돌아가므로 즉시 갱신
     if (world.hunger <= 0) {
       triggerGameOver('배고픔으로 쓰러졌다…');
       return;
