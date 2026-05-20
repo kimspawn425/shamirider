@@ -142,7 +142,10 @@
       const q = query(ref(db, 'rankings'), orderByChild('score'), limitToLast(max));
       const snap = await get(q);
       const arr = [];
-      snap.forEach((c) => arr.push(c.val()));
+      // 주의: forEach 콜백이 truthy를 반환하면 반복이 중단됨.
+      //       arr.push의 반환값(길이)이 truthy라서 첫 항목만 들어오는 버그를 방지하기 위해
+      //       반드시 블록 본문({}) 사용 — 암묵적 반환 X
+      snap.forEach((c) => { arr.push(c.val()); });
       return arr.sort((a, b) => b.score - a.score);
     }
   };
