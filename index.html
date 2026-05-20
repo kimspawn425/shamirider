@@ -122,25 +122,18 @@
     orderByChild, limitToLast, get
   } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-  // 4단계에서 복사한 config 붙여넣기
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
+  const firebaseConfig = {
+    apiKey: "AIzaSyASzhf98uTVyeUk7-S0PtQowVwH0tQmPrA",
+    authDomain: "shamirider-880dd.firebaseapp.com",
+    databaseURL: "https://shamirider-880dd-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "shamirider-880dd",
+    storageBucket: "shamirider-880dd.firebasestorage.app",
+    messagingSenderId: "10312891681",
+    appId: "1:10312891681:web:bf682a6ea931b8d1ac5260"
+  };
 
-// Your web app's Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyASzhf98uTVyeUk7-S0PtQowVwH0tQmPrA",
-  authDomain: "shamirider-880dd.firebaseapp.com",
-  databaseURL: "https://shamirider-880dd-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "shamirider-880dd",
-  storageBucket: "shamirider-880dd.firebasestorage.app",
-  messagingSenderId: "10312891681",
-  appId: "1:10312891681:web:bf682a6ea931b8d1ac5260"
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
 
   // game.js에서 사용할 수 있도록 window에 노출
   window.firebaseRanking = {
@@ -154,7 +147,6 @@ const app = initializeApp(firebaseConfig);
     }
   };
 </script>
-<script src="game.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
