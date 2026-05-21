@@ -406,6 +406,7 @@ const MOUNT_GAIT = {
     titleOverlay.classList.add('show');
     setTimeout(() => nameInput.focus(), 30);
     playMusic('title');
+    hideHungerGauge();
   }
   function hideTitleOverlay() {
     titleOverlay.classList.remove('show');
@@ -421,6 +422,11 @@ const MOUNT_GAIT = {
   function hideGameOverOverlay() {
     if (gameOverOverlay) gameOverOverlay.classList.remove('show');
   }
+
+  // 배고픔 게이지 표시/숨김 (타이틀/게임오버 화면에서는 숨김)
+  const hungerWrap = document.getElementById('hungerWrap');
+  function showHungerGauge() { if (hungerWrap) hungerWrap.style.display = ''; }
+  function hideHungerGauge() { if (hungerWrap) hungerWrap.style.display = 'none'; }
   if (restartBtn) {
     restartBtn.addEventListener('click', () => {
       hideGameOverOverlay();
@@ -440,6 +446,7 @@ const MOUNT_GAIT = {
     restart();
     world.state = 'running';
     playMusic('game');  // 게임 BGM 시작
+    showHungerGauge();  // 게임 진입 시 배고픔 게이지 표시
     // 게임 시작 시점에 AudioContext 미리 활성화 → 첫 SFX(점프/충돌)가 묻히는 현상 방지
     getAudioCtx();
   }
@@ -534,6 +541,7 @@ const MOUNT_GAIT = {
     world.gameOverImageKey = imageKey || 'gameOverHole';
     lastRankIndex = submitRanking(world.playerName, world.score, world.distance, false);
     showGameOverOverlay();
+    hideHungerGauge();
     stopAllMusic();
     sfx.over();
   }
@@ -542,6 +550,7 @@ const MOUNT_GAIT = {
     world.state = 'victory';
     lastRankIndex = submitRanking(world.playerName, world.score, world.distance, true);
     showGameOverOverlay();
+    hideHungerGauge();
     stopAllMusic();
     sfx.clear();
   }
@@ -590,6 +599,7 @@ const MOUNT_GAIT = {
       restart();
       world.state = 'running';
       playMusic('game');
+      showHungerGauge();
       return;
     }
     // T = 타이틀로 돌아가기
@@ -1981,6 +1991,7 @@ const MOUNT_GAIT = {
   // 초기 상태가 'title'이므로 타이틀 BGM 재생 시도
   // (브라우저 자동재생 정책으로 차단될 수 있으나, 사용자 첫 상호작용 시 unlock 리스너가 재시도)
   playMusic('title');
+  hideHungerGauge();   // 초기엔 타이틀이므로 게이지 숨김
 
   // Firebase 랭킹 초기 로드 (SDK 스크립트가 module이라 늦게 로드될 수 있어
   // 즉시 시도 + 1초 후 한 번 더 재시도)
