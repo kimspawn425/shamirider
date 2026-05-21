@@ -15,6 +15,8 @@ const ASSET_PATHS = {
   food:         'images/item.png',       // 먹는 아이템 (cat treat 형태)
   boss:         'images/boss.png',       // 보스 (스테이지 4 전용)
   title:        'images/title.png',      // 타이틀 화면 배경
+  gameOverHole: 'images/gameover01.png', // 구멍 추락 게임오버
+  gameOverHunger: 'images/gameover02.png', // 배고픔 게임오버
   platform:     '',
   ground:       '',
   background:   '',
@@ -256,6 +258,144 @@ const MOUNT_GAIT = {
   const nameInput = document.getElementById('nameInput');
   const startBtn = document.getElementById('startBtn');
 
+  // ===== BGM 관리 (타이틀 / 게임) =====
+  const bgmTitle = document.getElementById('bgm');
+  const bgmGame  = document.getElementById('gameBgm');
+  if (bgmTitle) bgmTitle.volume = 0.45;
+  if (bgmGame)  bgmGame.volume  = 0.40;
+  let currentBgm = null; // 'title' | 'game' | null
+
+  function stopBgmAudio(audio) {
+    if (!audio) return;
+    audio.pause();
+    try { audio.currentTime = 0; } catch (e) {}
+  }
+  function playMusic(kind) {
+    if (currentBgm === kind) {
+      // 같은 트랙 재진입: 이미 재생 중이면 그대로 두고, 일시정지 상태면 재개만
+      const a = kind === 'title' ? bgmTitle : (kind === 'game' ? bgmGame : null);
+      if (a && a.paused) a.play().catch(() => {});
+      return;
+    }
+    currentBgm = kind;
+    if (kind !== 'title') stopBgmAudio(bgmTitle);
+    if (kind !== 'game')  stopBgmAudio(bgmGame);
+    if (kind === 'title' && bgmTitle) bgmTitle.play().catch(() => {});
+    if (kind === 'game'  && bgmGame)  bgmGame.play().catch(() => {});
+  }
+  function stopAllMusic() {
+    currentBgm = null;
+    stopBgmAudio(bgmTitle);
+    stopBgmAudio(bgmGame);
+  }
+  // 자동재생 차단 대비: 첫 사용자 상호작용 시 한 번만 재시도하고 리스너 제거
+  let bgmUnlocked = false;
+  function tryUnlockBgm() {
+    if (bgmUnlocked) return;
+    const a = currentBgm === 'title' ? bgmTitle
+            : currentBgm === 'game'  ? bgmGame
+            : null;
+    if (a && a.paused) {
+      a.play().then(() => {
+        bgmUnlocked = true;
+        window.removeEventListener('click', tryUnlockBgm);
+        window.removeEventListener('keydown', tryUnlockBgm);
+        window.removeEventListener('touchstart', tryUnlockBgm);
+      }).catch(() => {});
+    } else if (a && !a.paused) {
+      bgmUnlocked = true;
+      window.removeEventListener('click', tryUnlockBgm);
+      window.removeEventListener('keydown', tryUnlockBgm);
+      window.removeEventListener('touchstart', tryUnlockBgm);
+    }
+  }
+  window.addEventListener('click', tryUnlockBgm);
+  window.addEventListener('keydown', tryUnlockBgm);
+  window.addEventListener('touchstart', tryUnlockBgm);
+
+  // ===== SFX (Web Audio API로 즉석 생성) =====
+  let audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { return null; }
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+    return audioCtx;
+  }
+  // 간단한 톤 재생 (주파수 슬라이드 지원)
+  function playTone(opt) {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const {
+      freq = 440, freqEnd = null, duration = 0.15,
+      type = 'sine', volume = 0.22, delay = 0
+    } = opt;
+    const t0 = ctx.currentTime + delay;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (freqEnd != null && freqEnd > 0) {
+      osc.frequency.exponentialRampToValueAtTime(freqEnd, t0 + duration);
+    }
+    gain.gain.setValueAtTime(volume, t0);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + duration + 0.02);
+  }
+  // 노이즈 버스트 (충돌용)
+  function playNoise(opt) {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const { duration = 0.3, volume = 0.3, cutoff = 800 } = opt || {};
+    const bufSize = Math.floor(ctx.sampleRate * duration);
+    const buffer = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const out = buffer.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) out[i] = (Math.random()*2 - 1) * (1 - i/bufSize);
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = cutoff;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+    noise.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+    noise.start();
+    noise.stop(ctx.currentTime + duration);
+  }
+  // 효과음 묶음
+  const sfx = {
+    jump:   () => playTone({ freq: 440, freqEnd: 720, duration: 0.16, type: 'square', volume: 0.18 }),
+    djump:  () => {
+      playTone({ freq: 660, freqEnd: 980, duration: 0.14, type: 'square', volume: 0.20 });
+      playTone({ freq: 1320, duration: 0.08, type: 'triangle', volume: 0.10, delay: 0.04 });
+    },
+    food:   () => {
+      playTone({ freq: 880,  duration: 0.10, type: 'sine', volume: 0.22 });
+      playTone({ freq: 1320, duration: 0.16, type: 'sine', volume: 0.18, delay: 0.07 });
+    },
+    crash:  () => {
+      // 임팩트 강화: 광역 노이즈 + 저음 슬라이드 + 중음 띠 + 짧은 초고음 클릭
+      playNoise({ duration: 0.45, volume: 0.55, cutoff: 1400 });
+      playTone({ freq: 180, freqEnd: 45,  duration: 0.45, type: 'sawtooth', volume: 0.32 });
+      playTone({ freq: 380, freqEnd: 110, duration: 0.25, type: 'square',   volume: 0.22, delay: 0.02 });
+      playTone({ freq: 1600,              duration: 0.05, type: 'square',   volume: 0.18 });
+    },
+    over:   () => {
+      playTone({ freq: 440, freqEnd: 180, duration: 0.5, type: 'sine',     volume: 0.25 });
+      playTone({ freq: 220, freqEnd: 90,  duration: 0.7, type: 'triangle', volume: 0.22, delay: 0.35 });
+    },
+    clear:  () => {
+      const notes = [523, 659, 784, 1047];   // C5 E5 G5 C6
+      notes.forEach((f, i) => playTone({ freq: f, duration: 0.22, type: 'square', volume: 0.22, delay: i * 0.12 }));
+    },
+  };
+
   // 이전 세션의 이름 자동 복원
   try {
     const savedName = localStorage.getItem('shamiRiderLastName');
@@ -265,10 +405,29 @@ const MOUNT_GAIT = {
   function showTitleOverlay() {
     titleOverlay.classList.add('show');
     setTimeout(() => nameInput.focus(), 30);
+    playMusic('title');
   }
   function hideTitleOverlay() {
     titleOverlay.classList.remove('show');
     nameInput.blur();
+  }
+
+  // ===== 게임오버/승리 - 다시하기 버튼 =====
+  const gameOverOverlay = document.getElementById('gameOverOverlay');
+  const restartBtn = document.getElementById('restartBtn');
+  function showGameOverOverlay() {
+    if (gameOverOverlay) gameOverOverlay.classList.add('show');
+  }
+  function hideGameOverOverlay() {
+    if (gameOverOverlay) gameOverOverlay.classList.remove('show');
+  }
+  if (restartBtn) {
+    restartBtn.addEventListener('click', () => {
+      hideGameOverOverlay();
+      restart();
+      world.state = 'title';
+      showTitleOverlay();
+    });
   }
 
   function startGame() {
@@ -277,8 +436,12 @@ const MOUNT_GAIT = {
     world.playerName = name;
     try { localStorage.setItem('shamiRiderLastName', name); } catch (e) {}
     hideTitleOverlay();
+    hideGameOverOverlay();
     restart();
     world.state = 'running';
+    playMusic('game');  // 게임 BGM 시작
+    // 게임 시작 시점에 AudioContext 미리 활성화 → 첫 SFX(점프/충돌)가 묻히는 현상 방지
+    getAudioCtx();
   }
   startBtn.addEventListener('click', startGame);
   nameInput.addEventListener('keydown', (e) => {
@@ -364,16 +527,23 @@ const MOUNT_GAIT = {
     return localIdx;
   }
 
-  function triggerGameOver(reason) {
+  function triggerGameOver(reason, imageKey) {
     if (world.state === 'gameover' || world.state === 'victory') return;
     world.state = 'gameover';
     world.gameOverReason = reason || '';
+    world.gameOverImageKey = imageKey || 'gameOverHole';
     lastRankIndex = submitRanking(world.playerName, world.score, world.distance, false);
+    showGameOverOverlay();
+    stopAllMusic();
+    sfx.over();
   }
   function triggerVictory() {
     if (world.state === 'gameover' || world.state === 'victory') return;
     world.state = 'victory';
     lastRankIndex = submitRanking(world.playerName, world.score, world.distance, true);
+    showGameOverOverlay();
+    stopAllMusic();
+    sfx.clear();
   }
 
   // 치트: 지정 스테이지로 즉시 점프
@@ -414,37 +584,33 @@ const MOUNT_GAIT = {
     if (e.repeat) return;
     if (world.state === 'title') return;
 
-    // 게임오버/승리 화면: R = 재시작, T = 타이틀
-    if (world.state === 'gameover' || world.state === 'victory') {
-      if (e.code === 'KeyR') {
-        restart();
-        world.state = 'running';
-        return;
-      }
-      if (e.code === 'KeyT') {
-        restart();
-        world.state = 'title';
-        showTitleOverlay();
-        return;
-      }
+    // R = 어느 상태에서든 재시작
+    if (e.code === 'KeyR') {
+      hideGameOverOverlay();
+      restart();
+      world.state = 'running';
+      playMusic('game');
       return;
     }
-
-    // 진행 중일 때만: 치트 키 (스테이지 점프) + T(타이틀 복귀) + Space(점프)
-    if (world.state !== 'running') return;
-
-    // 치트: Q/W/E/R = 스테이지 1/2/3/4로 즉시 점프
-    if (e.code === 'KeyQ') { jumpToStage(0); return; }
-    if (e.code === 'KeyW') { jumpToStage(1); return; }
-    if (e.code === 'KeyE') { jumpToStage(2); return; }
-    if (e.code === 'KeyR') { jumpToStage(3); return; }
-
+    // T = 타이틀로 돌아가기
     if (e.code === 'KeyT') {
+      hideGameOverOverlay();
       restart();
       world.state = 'title';
       showTitleOverlay();
       return;
     }
+
+    // 게임오버/승리 화면에선 다른 키 무시
+    if (world.state === 'gameover' || world.state === 'victory') return;
+    if (world.state !== 'running') return;
+
+    // 치트: 1/2/3/4 = 스테이지 1/2/3/4로 즉시 점프
+    if (e.code === 'Digit1') { jumpToStage(0); return; }
+    if (e.code === 'Digit2') { jumpToStage(1); return; }
+    if (e.code === 'Digit3') { jumpToStage(2); return; }
+    if (e.code === 'Digit4') { jumpToStage(3); return; }
+
     if (e.code === 'Space') tryJump();
   });
 
@@ -455,6 +621,7 @@ const MOUNT_GAIT = {
         mount.onSurface = null;
         jumpsUsed = 1;
         spawnDust(PLAYER_X, mount.y + MOUNT_H, 8);
+        sfx.jump();
       } else if (jumpsUsed === 1) {
         // 2단 점프 - 인물 분리
         mounted = false;
@@ -462,6 +629,7 @@ const MOUNT_GAIT = {
         rider.onSurface = null;
         jumpsUsed = 2;
         for (let i = 0; i < 10; i++) spawnDust(PLAYER_X, rider.y + RIDER_H/2, 4, '#fff');
+        sfx.djump();
       }
     } else {
       // 분리 상태: 인물이 표면(플랫폼/지면) 위에 있을 때만 점프
@@ -469,6 +637,7 @@ const MOUNT_GAIT = {
         rider.vy = JUMP_VY;
         rider.onSurface = null;
         for (let i = 0; i < 6; i++) spawnDust(PLAYER_X, rider.y + RIDER_H, 1, '#fff');
+        sfx.jump();
       }
     }
   }
@@ -476,8 +645,8 @@ const MOUNT_GAIT = {
   // ===== 월드 생성 =====
   function makePlatform(x, y, w) {
     const sd = stageDiff();
-    // 이동 블록 확률은 스테이지별
-    const moveChance = sd.moveChance;
+    // 이동 블록: 스테이지 2(인덱스 1)부터만 등장
+    const moveChance = world.currentStage >= 1 ? sd.moveChance : 0;
     let motion = null;
     if (world.distance > 80 && Math.random() < moveChance) {
       const isVertical = Math.random() < 0.55;
@@ -516,10 +685,11 @@ const MOUNT_GAIT = {
       nextGroundX += len;
     }
     while (nextPlatformX - world.scrollX < W + 600) {
-      // 240,340: 위쪽 (점프해 올라타야 함, 지면 통과 시 안전)
-      // 420,500: 중단 (인물 머리 충돌 위험)
-      // 580,640: 낮음 (탈것 충돌 위험)
-      const heights = [240, 340, 420, 500, 580, 640];
+      // 다양한 높이의 블록 (200~660 범위에서 40px 간격)
+      // 200~360: 점프해서 올라타야 닿는 위쪽 (안전 통과 가능)
+      // 400~540: 인물 머리/탈것이 부딪힐 수 있는 중단
+      // 580~660: 탈것이 충돌하는 낮음
+      const heights = [200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640];
       const y = heights[randInt(0, heights.length - 1)];
       const w = randInt(sd.platLen[0], sd.platLen[1]);
       const x = nextPlatformX;
@@ -532,13 +702,13 @@ const MOUNT_GAIT = {
       }
       nextPlatformX = x + w + randInt(sd.platGap[0], sd.platGap[1]);
     }
-    // 음식 사이 최소 간격 (px) - 시각적으로 겹치지 않도록 보장
-    const FOOD_MIN_GAP = 260;
+    // 음식 사이 최소 간격 (px) - 너무 가까이 겹치거나 줄줄이 등장하지 않도록
+    const FOOD_MIN_GAP = 480;
     while (nextFoodX - world.scrollX < W + 500) {
       let fx = nextFoodX, fy = GROUND_Y - 70;
       let placedOnPlat = false;
-      if (Math.random() < 0.5) {
-        // 정적 플랫폼 위에만 배치 (움직이는 블록은 제외)
+      // 플랫폼 위 배치 확률을 35%로 낮춤
+      if (Math.random() < 0.35) {
         const p = platforms.find(p =>
           !p.motion && p.baseX > nextFoodX && p.baseX + p.w > nextFoodX + 70
         );
@@ -553,9 +723,8 @@ const MOUNT_GAIT = {
       if (!tooClose && (groundExistsAt(fx + 28) || placedOnPlat)) {
         foods.push({ x: fx, y: fy, w: 56, h: 56, collected: false, bob: Math.random() * Math.PI * 2 });
       }
-      // 플랫폼 위에 놓인 fx가 nextFoodX보다 앞쪽일 수 있으므로,
-      // 항상 max(nextFoodX, fx) 이후로 다음 스폰 위치를 정함 → 뒤쪽으로 후퇴하는 버그 방지
-      nextFoodX = Math.max(nextFoodX, fx) + randInt(280, 560);
+      // 다음 스폰 위치는 충분히 멀리 (이전 280~560 → 600~1100)
+      nextFoodX = Math.max(nextFoodX, fx) + randInt(600, 1100);
     }
   }
 
@@ -770,7 +939,8 @@ const MOUNT_GAIT = {
     const wrap = document.getElementById('hungerWrap');
     const float = document.getElementById('floatLoss');
     const isGain = amount != null && amount > 0;
-    const display = amount != null ? Math.abs(amount) : 10;
+    // 소수점이 들어와도 정수로 표시
+    const display = Math.round(amount != null ? Math.abs(amount) : 10);
     if (bar) {
       const cls = isGain ? 'heal' : 'hit';
       bar.classList.remove('hit', 'heal');
@@ -840,13 +1010,14 @@ const MOUNT_GAIT = {
     world.crashTimer = 0.9;        // CRASH 상태 지속 시간 (초)
     world.shakeAmount = 14;        // 캐릭터 흔들림 진폭 (시간 따라 감쇠)
     world.speed = 0;               // 스크롤 즉시 정지
+    sfx.crash();                   // 충돌 효과음
 
     // 배고픔 차감 + 시각 효과 (게이지 width와 펄스/플로팅을 동시에 표시)
     world.hunger = Math.max(0, world.hunger - hungerPenalty);
-    flashHungerBar(hungerPenalty);
+    flashHungerBar(-hungerPenalty);   // 음수 전달 = 감소 연출(빨강)
     updateHUD();   // crashing 상태에선 update()의 끝 갱신이 안 돌아가므로 즉시 갱신
     if (world.hunger <= 0) {
-      triggerGameOver('배고픔으로 쓰러졌다…');
+      triggerGameOver('배고픔으로 쓰러졌다…', 'gameOverHunger');
       return;
     }
 
@@ -919,7 +1090,7 @@ const MOUNT_GAIT = {
     world.hunger -= sd.hungerRate * dt;
     if (world.hunger <= 0) {
       world.hunger = 0;
-      triggerGameOver('배고픔으로 쓰러졌다…');
+      triggerGameOver('배고픔으로 쓰러졌다…', 'gameOverHunger');
       return;
     }
 
@@ -991,11 +1162,11 @@ const MOUNT_GAIT = {
 
     // 추락(게임오버)
     if (mount.y > H + 30) {
-      triggerGameOver('구멍으로 추락했다…');
+      triggerGameOver('구멍으로 추락했다…', 'gameOverHole');
       return;
     }
     if (!mounted && rider.y > H + 30) {
-      triggerGameOver('라이더를 잃어버렸다…');
+      triggerGameOver('라이더를 잃어버렸다…', 'gameOverHole');
       return;
     }
 
@@ -1009,10 +1180,10 @@ const MOUNT_GAIT = {
         const charBot = mount.y + MOUNT_H;
         if (charTop < f.y + f.h && charBot > f.y) {
           f.collected = true;
-          const before = world.hunger;
           world.hunger = Math.min(100, world.hunger + HUNGER_REFILL);
-          const actualGain = world.hunger - before; // 100을 넘지 않는 실제 회복량
-          flashHungerBar(actualGain > 0 ? actualGain : HUNGER_REFILL);
+          // max를 넘는 경우라도 표시는 항상 상수값으로 (소수점 방지)
+          flashHungerBar(HUNGER_REFILL);
+          sfx.food();
           world.score += 100;
           for (let i = 0; i < 12; i++) {
             particles.push({
@@ -1578,71 +1749,103 @@ const MOUNT_GAIT = {
   }
 
   // 랭킹 표시 (게임오버/승리 공통)
-  function drawRankingPanel(centerY) {
+  // 우측 패널 안에 랭킹을 표시. panelRight = 패널의 우측 x, panelWidth = 패널 너비
+  function drawRankingPanel(centerY, panelRight, panelWidth) {
     const list = cachedRanking;
+    const panelLeft = panelRight - panelWidth;
+    const titleX = panelLeft + panelWidth/2;
+
     ctx.textAlign = 'center';
-    ctx.font = 'bold 22px sans-serif';
+    ctx.font = 'bold 20px sans-serif';
     ctx.fillStyle = '#ffcb6b';
-    ctx.fillText('— RANKING TOP ' + RANKING_MAX + ' —', W/2, centerY);
+    ctx.fillText('— RANKING TOP ' + RANKING_MAX + ' —', titleX, centerY);
 
-    const startY = centerY + 32;
-    const rowH = 24;
-    const colName = W/2 - 130;
-    const colScore = W/2 + 50;
-    const colDist = W/2 + 170;
+    const startY = centerY + 28;
+    const rowH = 22;
+    // 컬럼 X 좌표 (패널 내부, 좌측부터)
+    const colIdx = panelLeft + 14;
+    const colName = panelLeft + 50;
+    const colScore = panelRight - 80;
+    const colDist = panelRight - 12;
 
-    ctx.font = '13px sans-serif';
+    ctx.font = '12px sans-serif';
     ctx.fillStyle = '#888';
     ctx.textAlign = 'left';
-    ctx.fillText('#', colName - 30, startY - 8);
-    ctx.fillText('NAME', colName, startY - 8);
+    ctx.fillText('#',     colIdx,  startY - 8);
+    ctx.fillText('NAME',  colName, startY - 8);
+    ctx.textAlign = 'right';
     ctx.fillText('SCORE', colScore, startY - 8);
-    ctx.fillText('DIST', colDist, startY - 8);
+    ctx.fillText('DIST',  colDist,  startY - 8);
 
-    ctx.font = 'bold 16px sans-serif';
+    ctx.font = 'bold 15px sans-serif';
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
       const isMine = i === lastRankIndex;
       ctx.fillStyle = isMine ? '#ff6b3d' : '#fff';
       const y = startY + i * rowH + 12;
       ctx.textAlign = 'left';
-      ctx.fillText((i+1).toString().padStart(2, ' '), colName - 30, y);
+      ctx.fillText((i+1).toString().padStart(2, ' '), colIdx, y);
       ctx.fillText((e.name || 'PLAYER') + (e.cleared ? ' ★' : ''), colName, y);
       ctx.textAlign = 'right';
-      ctx.fillText(e.score.toString(), colScore + 60, y);
-      ctx.fillText(e.distance + 'm', colDist + 60, y);
+      ctx.fillText(e.score.toString(), colScore, y);
+      ctx.fillText(e.distance + 'm', colDist, y);
     }
     if (list.length === 0) {
       ctx.fillStyle = '#888';
       ctx.font = '14px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('(아직 기록 없음)', W/2, startY + 20);
+      ctx.fillText('(아직 기록 없음)', titleX, startY + 20);
     }
   }
 
   function drawGameOver() {
-    ctx.fillStyle = 'rgba(0,0,0,0.78)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#ff6b3d';
-    ctx.textAlign = 'center';
+    // 1) 배경 이미지 (게임오버 종류별)
+    const img = images[world.gameOverImageKey] || images.gameOverHole;
+    if (img) {
+      // 좌측을 캐릭터 이미지로 가득 채움 (캔버스 전체에 stretch)
+      ctx.drawImage(img, 0, 0, W, H);
+      // 우측 패널이 들어갈 자리에 어두운 그라데이션 (이미지를 살짝 비치게)
+      const grad = ctx.createLinearGradient(W * 0.55, 0, W, 0);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(0.4, 'rgba(0,0,0,0.65)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.88)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.78)';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // 2) 우측 패널 정보 (모두 우측 정렬)
+    const panelRight = W - 32;
+    const panelWidth = 440;
+    const panelLeft = panelRight - panelWidth;
+
     ctx.textBaseline = 'alphabetic';
-    ctx.font = 'bold 64px sans-serif';
-    ctx.fillText('GAME OVER', W/2, 130);
+    ctx.textAlign = 'right';
+
+    // GAME OVER
+    ctx.font = 'bold 56px sans-serif';
+    ctx.fillStyle = '#ff6b3d';
+    ctx.fillText('GAME OVER', panelRight, 100);
+
+    // 이유
+    ctx.font = '18px sans-serif';
     ctx.fillStyle = '#fff';
-    ctx.font = '20px sans-serif';
-    ctx.fillText(world.gameOverReason, W/2, 170);
-    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(world.gameOverReason, panelRight, 132);
+
+    // 본인 점수
+    ctx.font = 'bold 26px sans-serif';
     ctx.fillStyle = '#ffcb6b';
-    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', W/2, 215);
-    ctx.font = '16px sans-serif';
+    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', panelRight, 175);
+
+    // 거리
+    ctx.font = '15px sans-serif';
     ctx.fillStyle = '#ddd';
-    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm', W/2, 240);
+    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm', panelRight, 200);
 
-    drawRankingPanel(290);
-
-    ctx.font = '14px sans-serif';
-    ctx.fillStyle = '#aaa';
-    ctx.fillText('R 키: 같은 이름으로 다시 시작 / T 키: 타이틀로', W/2, H - 30);
+    // 랭킹 패널 (우측 정렬)
+    drawRankingPanel(245, panelRight, panelWidth);
   }
 
   function render() {
@@ -1695,32 +1898,32 @@ const MOUNT_GAIT = {
   }
 
   function drawVictory() {
+    // 승리도 우측 패널 형식 (배경은 단순 다크)
     ctx.fillStyle = 'rgba(0,0,0,0.82)';
     ctx.fillRect(0, 0, W, H);
-    ctx.textAlign = 'center';
+
+    const panelRight = W - 32;
+    const panelWidth = 440;
     ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'right';
 
     // CLEAR! 큰 노란 글자
-    ctx.font = 'bold 88px sans-serif';
+    ctx.font = 'bold 80px sans-serif';
     ctx.lineWidth = 8;
     ctx.strokeStyle = '#000';
-    ctx.strokeText('CLEAR!', W/2, 140);
+    ctx.strokeText('CLEAR!', panelRight, 100);
     ctx.fillStyle = '#ffcb6b';
-    ctx.fillText('CLEAR!', W/2, 140);
+    ctx.fillText('CLEAR!', panelRight, 100);
 
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 28px sans-serif';
-    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', W/2, 195);
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', panelRight, 145);
 
-    ctx.font = '18px sans-serif';
+    ctx.font = '15px sans-serif';
     ctx.fillStyle = '#ddd';
-    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm  |  모든 스테이지 클리어 ★', W/2, 225);
+    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm  |  모든 스테이지 클리어 ★', panelRight, 172);
 
-    drawRankingPanel(275);
-
-    ctx.fillStyle = '#aaa';
-    ctx.font = '14px sans-serif';
-    ctx.fillText('R 키: 같은 이름으로 다시 도전 / T 키: 타이틀로', W/2, H - 30);
+    drawRankingPanel(215, panelRight, panelWidth);
   }
 
   // ===== HUD =====
@@ -1774,6 +1977,10 @@ const MOUNT_GAIT = {
   generateWorld();
   updateHUD();
   requestAnimationFrame(loop);
+
+  // 초기 상태가 'title'이므로 타이틀 BGM 재생 시도
+  // (브라우저 자동재생 정책으로 차단될 수 있으나, 사용자 첫 상호작용 시 unlock 리스너가 재시도)
+  playMusic('title');
 
   // Firebase 랭킹 초기 로드 (SDK 스크립트가 module이라 늦게 로드될 수 있어
   // 즉시 시도 + 1초 후 한 번 더 재시도)
