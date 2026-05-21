@@ -17,6 +17,7 @@ const ASSET_PATHS = {
   title:        'images/title.png',      // 타이틀 화면 배경
   gameOverHole: 'images/gameover01.png', // 구멍 추락 게임오버
   gameOverHunger: 'images/gameover02.png', // 배고픔 게임오버
+  gameOverClear: 'images/gameover03.png',  // 클리어(승리) 화면
   platform:     '',
   ground:       '',
   background:   '',
@@ -620,6 +621,8 @@ const MOUNT_GAIT = {
     if (e.code === 'Digit2') { jumpToStage(1); return; }
     if (e.code === 'Digit3') { jumpToStage(2); return; }
     if (e.code === 'Digit4') { jumpToStage(3); return; }
+    // 치트: 0 = 즉시 클리어(승리 화면)
+    if (e.code === 'Digit0') { triggerVictory(); return; }
 
     if (e.code === 'Space') tryJump();
   });
@@ -1908,10 +1911,22 @@ const MOUNT_GAIT = {
   }
 
   function drawVictory() {
-    // 승리도 우측 패널 형식 (배경은 단순 다크)
-    ctx.fillStyle = 'rgba(0,0,0,0.82)';
-    ctx.fillRect(0, 0, W, H);
+    // 1) 배경 이미지 (gameOverClear - 캐릭터들이 보스 쓰러뜨리고 환호)
+    if (images.gameOverClear) {
+      ctx.drawImage(images.gameOverClear, 0, 0, W, H);
+      // 우측 패널 영역에 어두운 그라데이션 (정보 가독성 확보 + 좌측 이미지는 잘 보임)
+      const grad = ctx.createLinearGradient(W * 0.55, 0, W, 0);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(0.4, 'rgba(0,0,0,0.65)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.88)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.82)';
+      ctx.fillRect(0, 0, W, H);
+    }
 
+    // 2) 우측 패널 정보
     const panelRight = W - 32;
     const panelWidth = 440;
     ctx.textBaseline = 'alphabetic';
