@@ -224,6 +224,7 @@ const MOUNT_GAIT = {
   const world = {
     scrollX: 0, speed: 0, state: 'title',   // 초기 상태: 타이틀
     playerName: '',                          // 입력받은 이름
+    playStartTime: 0,                        // 게임 시작 시각 (서버 검증용)
     invulnTimer: 0,
     crashTimer: 0, shakeAmount: 0,
     hunger: 100, score: 0, distance: 0,
@@ -446,6 +447,7 @@ const MOUNT_GAIT = {
     hideGameOverOverlay();
     restart();
     world.state = 'running';
+    world.playStartTime = Date.now();   // 서버 측 정합성 검증용 시작 시각
     playMusic('game');  // 게임 BGM 시작
     showHungerGauge();  // 게임 진입 시 배고픔 게이지 표시
     // 게임 시작 시점에 AudioContext 미리 활성화 → 첫 SFX(점프/충돌)가 묻히는 현상 방지
@@ -512,7 +514,7 @@ const MOUNT_GAIT = {
     cachedRanking = loadRankingLocal();
   }
 
-  // 점수 등록 (로컬 백업 + Firebase 비동기)
+  // 점수 등록 (로컬 백업 + Firebase 비동기 - Cloud Function 경유)
   function submitRanking(name, score, distance, cleared) {
     const entry = {
       name: (name || 'PLAYER').slice(0, 12),
@@ -522,15 +524,23 @@ const MOUNT_GAIT = {
       date: Date.now(),
     };
     lastSubmittedEntry = entry;
-    // 1) 로컬에 즉시 등록 (오프라인/실패 폴백)
+    // 1) 로컬에 즉시 등록 (서버 검증 실패 시에도 본인 화면엔 점수 보임)
     const localIdx = addToLocalRanking(entry);
     cachedRanking = loadRankingLocal();
     lastRankIndex = localIdx;
-    // 2) Firebase에 비동기 등록 + 갱신
+    // 2) Cloud Function 호출 → 서버 측 정합성 검증 → 통과 시 DB 저장
     if (hasFirebase()) {
-      window.firebaseRanking.submit(entry)
+      // 플레이 시간 계산 (게임 시작 ~ 게임 오버까지의 ms)
+      const playTimeMs = world.playStartTime
+        ? Date.now() - world.playStartTime
+        : 0;
+      window.firebaseRanking.submit(entry, playTimeMs)
         .then(() => refreshRanking())
-        .catch((e) => console.warn('[Firebase] 랭킹 등록 실패:', e));
+        .catch((e) => {
+          // 서버 검증 실패(점수 비현실적 등) 또는 네트워크 오류
+          // 로컬 백업엔 이미 들어가 있어 사용자 화면엔 표시됨
+          console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e.message || e);
+        });
     }
     return localIdx;
   }
@@ -599,6 +609,7 @@ const MOUNT_GAIT = {
       hideGameOverOverlay();
       restart();
       world.state = 'running';
+      world.playStartTime = Date.now();   // 재시작 시점 갱신
       playMusic('game');
       showHungerGauge();
       return;
