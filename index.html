@@ -168,8 +168,18 @@
 </div>
 <audio id="bgm"     src="bgm.mp3"      loop preload="auto"></audio>
 <audio id="gameBgm" src="gameplay.mp3" loop preload="auto"></audio>
+<!-- App Check 디버그 토큰 (로컬 테스트용)
+     배포 전엔 이 <script> 블록을 주석 처리하거나 삭제하세요.
+     로컬에서 페이지 열면 콘솔에 디버그 토큰이 출력되는데,
+     그 값을 Firebase 콘솔 → App Check → 디버그 토큰 관리에 등록해야 통과됨. -->
+<script>
+  // 주석 해제하면 로컬 테스트 가능 (배포 사이트에선 주석 처리 유지)
+  // self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+</script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { initializeAppCheck, ReCaptchaEnterpriseProvider }
+    from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
   import {
     getDatabase, ref, push, query,
     orderByChild, limitToLast, get
@@ -186,6 +196,18 @@
   };
 
   const app = initializeApp(firebaseConfig);
+
+  // ⭐ App Check 초기화 (다른 Firebase 서비스보다 먼저 호출 필수)
+  // 아래 "YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY" 자리에 Cloud Console에서 발급받은 사이트 키 붙여넣기
+  try {
+    initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider("6Le_x_QsAAAAANblyDIJa4WxJjUob_m4FgdQwEma"),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } catch (e) {
+    console.warn('[AppCheck] 초기화 실패:', e);
+  }
+
   const db = getDatabase(app);
 
   // game.js에서 사용할 수 있도록 window에 노출
