@@ -224,7 +224,8 @@ const MOUNT_GAIT = {
   const world = {
     scrollX: 0, speed: 0, state: 'title',   // 초기 상태: 타이틀
     playerName: '',                          // 입력받은 이름
-    playStartTime: 0,                        // 게임 시작 시각 (서버 검증용)
+    playStartTime: 0,                        // 클라이언트 측 게임 시작 시각 (로컬 통계용)
+    serverSessionId: null,                   // 서버 세션 ID (점수 제출 시 필수)
     invulnTimer: 0,
     crashTimer: 0, shakeAmount: 0,
     hunger: 100, score: 0, distance: 0,
@@ -447,11 +448,18 @@ const MOUNT_GAIT = {
     hideGameOverOverlay();
     restart();
     world.state = 'running';
-    world.playStartTime = Date.now();   // 서버 측 정합성 검증용 시작 시각
+    world.playStartTime = Date.now();
+    world.serverSessionId = null;     // 새 세션 전엔 null
     playMusic('game');  // 게임 BGM 시작
     showHungerGauge();  // 게임 진입 시 배고픔 게이지 표시
     // 게임 시작 시점에 AudioContext 미리 활성화 → 첫 SFX(점프/충돌)가 묻히는 현상 방지
     getAudioCtx();
+    // 서버 세션 시작 (비동기 - 게임은 즉시 시작되고 세션은 백그라운드로 발급)
+    if (hasFirebase() && window.firebaseRanking.startSession) {
+      window.firebaseRanking.startSession()
+        .then(sid => { world.serverSessionId = sid; })
+        .catch(e => { console.warn('[Session] 시작 실패:', e?.message || e); });
+    }
   }
   startBtn.addEventListener('click', startGame);
   nameInput.addEventListener('keydown', (e) => {
@@ -515,6 +523,8 @@ const MOUNT_GAIT = {
   }
 
   // 점수 등록 (로컬 백업 + Firebase 비동기 - Cloud Function 경유)
+  // 서버는 startSession에서 받은 sessionId의 startTime을 기준으로 playTime을 직접 계산
+  // → 클라이언트가 playTime을 위조할 수 없음
   function submitRanking(name, score, distance, cleared) {
     const entry = {
       name: (name || 'PLAYER').slice(0, 12),
@@ -528,18 +538,20 @@ const MOUNT_GAIT = {
     const localIdx = addToLocalRanking(entry);
     cachedRanking = loadRankingLocal();
     lastRankIndex = localIdx;
-    // 2) Cloud Function 호출 → 서버 측 정합성 검증 → 통과 시 DB 저장
+    // 2) Cloud Function 호출 → 서버 검증 → 통과 시 DB 저장
     if (hasFirebase()) {
-      // 플레이 시간 계산 (게임 시작 ~ 게임 오버까지의 ms)
-      const playTimeMs = world.playStartTime
-        ? Date.now() - world.playStartTime
-        : 0;
-      window.firebaseRanking.submit(entry, playTimeMs)
-        .then(() => refreshRanking())
+      const sid = world.serverSessionId;
+      if (!sid) {
+        console.warn('[Firebase] 서버 세션 없음, 원격 등록 건너뜀');
+        return localIdx;
+      }
+      window.firebaseRanking.submit(entry, sid)
+        .then(() => {
+          world.serverSessionId = null;   // 세션은 1회용
+          refreshRanking();
+        })
         .catch((e) => {
-          // 서버 검증 실패(점수 비현실적 등) 또는 네트워크 오류
-          // 로컬 백업엔 이미 들어가 있어 사용자 화면엔 표시됨
-          console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e.message || e);
+          console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e?.message || e);
         });
     }
     return localIdx;
@@ -609,9 +621,16 @@ const MOUNT_GAIT = {
       hideGameOverOverlay();
       restart();
       world.state = 'running';
-      world.playStartTime = Date.now();   // 재시작 시점 갱신
+      world.playStartTime = Date.now();
+      world.serverSessionId = null;
       playMusic('game');
       showHungerGauge();
+      // 새 서버 세션 발급
+      if (hasFirebase() && window.firebaseRanking.startSession) {
+        window.firebaseRanking.startSession()
+          .then(sid => { world.serverSessionId = sid; })
+          .catch(e => { console.warn('[Session] 시작 실패:', e?.message || e); });
+      }
       return;
     }
     // T = 타이틀로 돌아가기

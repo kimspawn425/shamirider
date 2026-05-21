@@ -213,18 +213,24 @@
   const db = getDatabase(app);
   // Cloud Function은 asia-southeast1 리전에 배포되어야 함 (index.js의 region과 일치)
   const functions = getFunctions(app, 'asia-southeast1');
-  const submitScoreFn = httpsCallable(functions, 'submitScore');
+  const startSessionFn = httpsCallable(functions, 'startSession');
+  const submitScoreFn  = httpsCallable(functions, 'submitScore');
 
   // game.js에서 사용할 수 있도록 window에 노출
   window.firebaseRanking = {
-    // 점수는 Cloud Function을 거쳐서 등록 (서버 측 점수-시간 정합성 검증)
-    submit: async (entry, playTimeMs) => {
+    // 게임 시작 시 서버 세션 발급 → 서버가 시작 시각 기록
+    startSession: async () => {
+      const result = await startSessionFn();
+      return result?.data?.sessionId || null;
+    },
+    // 점수 제출 - 발급받은 sessionId 첨부 (playTime은 서버가 계산)
+    submit: async (entry, sessionId) => {
       return submitScoreFn({
+        sessionId,
         name: entry.name,
         score: entry.score,
         distance: entry.distance,
         cleared: entry.cleared,
-        playTimeMs: playTimeMs || 0,
       });
     },
     load: async (max = 10) => {
