@@ -556,8 +556,11 @@ const MOUNT_GAIT = {
         && e.date === lastSubmittedEntry.date;
   }
 
-  // 매 프레임 동기 접근 가능한 캐시 (drawRankingPanel에서 사용)
-  let cachedRanking = loadRankingLocal().slice(0, RANKING_MAX);
+  // 매 프레임 동기 접근 가능한 캐시
+  //   null  → 아직 서버로부터 로드 안 됨 (Loading 표시)
+  //   []    → 로드 완료, 데이터 없음
+  //   [...] → 로드 완료, 데이터 있음
+  let cachedRanking = null;
   let lastRankIndex = -1; // 최근 점수의 랭킹 위치 (강조 표시용)
   let lastSubmittedEntry = null; // 본인 점수 식별용
 
@@ -572,7 +575,6 @@ const MOUNT_GAIT = {
       try {
         const remote = await window.firebaseRanking.load(RANKING_MAX);
         cachedRanking = Array.isArray(remote) ? remote : [];
-        // 본인 점수가 있다면 인덱스 갱신
         if (lastSubmittedEntry) {
           lastRankIndex = cachedRanking.findIndex(
             (e) => e.name === lastSubmittedEntry.name
@@ -582,9 +584,13 @@ const MOUNT_GAIT = {
         }
         return;
       } catch (e) {
-        console.warn('[Firebase] 랭킹 로드 실패, 로컬 사용:', e);
+        console.warn('[Firebase] 랭킹 로드 실패:', e);
+        // 실패 시에도 빈 배열로 두어 Loading 상태는 해제 (실패 표시는 화면에서 처리 가능)
+        cachedRanking = [];
+        return;
       }
     }
+    // Firebase 자체가 없는 환경(로컬 개발 등): 로컬 데이터를 폴백으로 사용
     cachedRanking = loadRankingLocal().slice(0, RANKING_MAX);
   }
 
@@ -600,10 +606,13 @@ const MOUNT_GAIT = {
       date: Date.now(),
     };
     lastSubmittedEntry = entry;
-    // 1) 로컬에 즉시 등록 (서버 검증 실패 시에도 본인 화면엔 점수 보임)
+    // 1) 로컬에 즉시 등록 (본인 역대 랭킹용)
+    //    cachedRanking(전체 랭킹)은 건드리지 않음 → 서버 응답 후 refreshRanking이 갱신
+    //    이렇게 해야 "전체 랭킹"에 본인 데이터만 잠깐 표시되는 현상 방지
     const localIdx = addToLocalRanking(entry);
-    cachedRanking = loadRankingLocal().slice(0, RANKING_MAX);
-    lastRankIndex = localIdx;
+    lastRankIndex = -1;   // 전체 랭킹 인덱스는 refreshRanking 후 산출됨
+    // 서버 결과 받기 전엔 cachedRanking을 null로 두어 Loading 표시
+    if (hasFirebase()) cachedRanking = null;
     // 2) Cloud Function 호출 → 서버 검증 → 통과 시 DB 저장
     if (hasFirebase()) {
       const sid = world.serverSessionId;
@@ -1876,8 +1885,6 @@ const MOUNT_GAIT = {
   //   rowH: 행 높이 (기본 20)
   function drawRankingPanel(centerY, panelRight, panelWidth, dataList, title, rowH) {
     rowH = rowH || 20;
-    // 어떤 경우에도 TOP N만 표시 (방어 코드)
-    const list = (dataList || []).slice(0, RANKING_MAX);
     const panelLeft = panelRight - panelWidth;
     const titleX = panelLeft + panelWidth/2;
 
@@ -1887,6 +1894,19 @@ const MOUNT_GAIT = {
     ctx.fillText(title || '— RANKING —', titleX, centerY);
 
     const startY = centerY + 24;
+
+    // null = 아직 로드 안 됨 → Loading 표시
+    if (dataList === null) {
+      ctx.fillStyle = '#aaa';
+      ctx.font = 'italic 16px sans-serif';
+      ctx.textAlign = 'center';
+      const dots = '.'.repeat(1 + (Math.floor(Date.now() / 400) % 3));
+      ctx.fillText('Loading' + dots, titleX, startY + 22);
+      return;
+    }
+
+    // 어떤 경우에도 TOP N만 표시 (방어 코드)
+    const list = (dataList || []).slice(0, RANKING_MAX);
     // 컬럼 X 좌표
     const colIdx   = panelLeft + 14;
     const colName  = panelLeft + 46;
