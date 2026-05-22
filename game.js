@@ -439,6 +439,30 @@ const MOUNT_GAIT = {
     });
   }
 
+  // 서버 heartbeat 인터벌
+  let heartbeatTimer = null;
+  const HEARTBEAT_INTERVAL_MS = 10000;   // 10초마다
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      // 게임 진행 중에만 (running 또는 crashing 상태)
+      if (world.state !== 'running' && world.state !== 'crashing') return;
+      const sid = world.serverSessionId;
+      if (!sid) return;   // 세션 발급 전이면 스킵
+      if (!hasFirebase() || !window.firebaseRanking.heartbeat) return;
+      window.firebaseRanking.heartbeat(sid, world.score, world.distance)
+        .catch(e => {
+          // 서버가 거부하면 세션이 손상된 거라 점수 등록 못 함
+          // 콘솔 경고만 출력하고 게임은 계속 (로컬 점수는 보존)
+          console.warn('[Heartbeat] 거부:', e?.message || e);
+        });
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+  function stopHeartbeat() {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
   function startGame() {
     const raw = (nameInput.value || '').trim();
     const name = raw.slice(0, 12) || 'PLAYER';
@@ -449,15 +473,17 @@ const MOUNT_GAIT = {
     restart();
     world.state = 'running';
     world.playStartTime = Date.now();
-    world.serverSessionId = null;     // 새 세션 전엔 null
-    playMusic('game');  // 게임 BGM 시작
-    showHungerGauge();  // 게임 진입 시 배고픔 게이지 표시
-    // 게임 시작 시점에 AudioContext 미리 활성화 → 첫 SFX(점프/충돌)가 묻히는 현상 방지
+    world.serverSessionId = null;
+    playMusic('game');
+    showHungerGauge();
     getAudioCtx();
-    // 서버 세션 시작 (비동기 - 게임은 즉시 시작되고 세션은 백그라운드로 발급)
+    // 서버 세션 시작 (비동기) + 세션 받으면 heartbeat 시작
     if (hasFirebase() && window.firebaseRanking.startSession) {
       window.firebaseRanking.startSession()
-        .then(sid => { world.serverSessionId = sid; })
+        .then(sid => {
+          world.serverSessionId = sid;
+          startHeartbeat();
+        })
         .catch(e => { console.warn('[Session] 시작 실패:', e?.message || e); });
     }
   }
@@ -468,7 +494,8 @@ const MOUNT_GAIT = {
 
   // ===== 랭킹 시스템 (Firebase + localStorage 폴백) =====
   const RANKING_KEY = 'shamiRiderRanking';
-  const RANKING_MAX = 10;
+  const RANKING_MAX = 10;            // 화면 표시용 (TOP N)
+  const LOCAL_RANKING_MAX = 200;     // localStorage 용량 (본인 역대 기록 보존)
 
   // 로컬(localStorage) 백업용
   function loadRankingLocal() {
@@ -485,13 +512,27 @@ const MOUNT_GAIT = {
     const list = loadRankingLocal();
     list.push(entry);
     list.sort((a, b) => b.score - a.score);
-    if (list.length > RANKING_MAX) list.length = RANKING_MAX;
+    if (list.length > LOCAL_RANKING_MAX) list.length = LOCAL_RANKING_MAX;
     saveRankingLocal(list);
     return list.indexOf(entry);
   }
+  // 현재 플레이어의 역대 TOP N (localStorage 기반)
+  function loadPersonalRanking() {
+    const all = loadRankingLocal();
+    return all
+      .filter(e => e.name === world.playerName)
+      .slice(0, RANKING_MAX);
+  }
+  // 이번 게임의 entry인지 식별 (date 기준 - 매번 고유)
+  function isCurrentEntry(e) {
+    if (!lastSubmittedEntry || !e) return false;
+    return e.name === lastSubmittedEntry.name
+        && e.score === lastSubmittedEntry.score
+        && e.date === lastSubmittedEntry.date;
+  }
 
   // 매 프레임 동기 접근 가능한 캐시 (drawRankingPanel에서 사용)
-  let cachedRanking = loadRankingLocal();
+  let cachedRanking = loadRankingLocal().slice(0, RANKING_MAX);
   let lastRankIndex = -1; // 최근 점수의 랭킹 위치 (강조 표시용)
   let lastSubmittedEntry = null; // 본인 점수 식별용
 
@@ -519,7 +560,7 @@ const MOUNT_GAIT = {
         console.warn('[Firebase] 랭킹 로드 실패, 로컬 사용:', e);
       }
     }
-    cachedRanking = loadRankingLocal();
+    cachedRanking = loadRankingLocal().slice(0, RANKING_MAX);
   }
 
   // 점수 등록 (로컬 백업 + Firebase 비동기 - Cloud Function 경유)
@@ -536,7 +577,7 @@ const MOUNT_GAIT = {
     lastSubmittedEntry = entry;
     // 1) 로컬에 즉시 등록 (서버 검증 실패 시에도 본인 화면엔 점수 보임)
     const localIdx = addToLocalRanking(entry);
-    cachedRanking = loadRankingLocal();
+    cachedRanking = loadRankingLocal().slice(0, RANKING_MAX);
     lastRankIndex = localIdx;
     // 2) Cloud Function 호출 → 서버 검증 → 통과 시 DB 저장
     if (hasFirebase()) {
@@ -545,14 +586,21 @@ const MOUNT_GAIT = {
         console.warn('[Firebase] 서버 세션 없음, 원격 등록 건너뜀');
         return localIdx;
       }
-      window.firebaseRanking.submit(entry, sid)
-        .then(() => {
-          world.serverSessionId = null;   // 세션은 1회용
-          refreshRanking();
-        })
-        .catch((e) => {
-          console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e?.message || e);
-        });
+      // 제출 직전 마지막 heartbeat 한 번 보내서 서버의 lastScore/lastDistance 최신화
+      // → submitScore의 "마지막 heartbeat 이후 너무 오래" 체크 통과
+      const finalHeartbeat = window.firebaseRanking.heartbeat
+        ? window.firebaseRanking.heartbeat(sid, entry.score, entry.distance).catch(() => {})
+        : Promise.resolve();
+      finalHeartbeat.then(() =>
+        window.firebaseRanking.submit(entry, sid)
+          .then(() => {
+            world.serverSessionId = null;   // 세션은 1회용
+            refreshRanking();
+          })
+          .catch((e) => {
+            console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e?.message || e);
+          })
+      );
     }
     return localIdx;
   }
@@ -562,6 +610,7 @@ const MOUNT_GAIT = {
     world.state = 'gameover';
     world.gameOverReason = reason || '';
     world.gameOverImageKey = imageKey || 'gameOverHole';
+    stopHeartbeat();
     lastRankIndex = submitRanking(world.playerName, world.score, world.distance, false);
     showGameOverOverlay();
     hideHungerGauge();
@@ -571,6 +620,7 @@ const MOUNT_GAIT = {
   function triggerVictory() {
     if (world.state === 'gameover' || world.state === 'victory') return;
     world.state = 'victory';
+    stopHeartbeat();
     lastRankIndex = submitRanking(world.playerName, world.score, world.distance, true);
     showGameOverOverlay();
     hideHungerGauge();
@@ -618,6 +668,7 @@ const MOUNT_GAIT = {
 
     // R = 어느 상태에서든 재시작
     if (e.code === 'KeyR') {
+      stopHeartbeat();
       hideGameOverOverlay();
       restart();
       world.state = 'running';
@@ -625,10 +676,13 @@ const MOUNT_GAIT = {
       world.serverSessionId = null;
       playMusic('game');
       showHungerGauge();
-      // 새 서버 세션 발급
+      // 새 서버 세션 발급 + heartbeat 재시작
       if (hasFirebase() && window.firebaseRanking.startSession) {
         window.firebaseRanking.startSession()
-          .then(sid => { world.serverSessionId = sid; })
+          .then(sid => {
+            world.serverSessionId = sid;
+            startHeartbeat();
+          })
           .catch(e => { console.warn('[Session] 시작 실패:', e?.message || e); });
       }
       return;
@@ -1792,52 +1846,64 @@ const MOUNT_GAIT = {
   }
 
   // 랭킹 표시 (게임오버/승리 공통)
-  // 우측 패널 안에 랭킹을 표시. panelRight = 패널의 우측 x, panelWidth = 패널 너비
-  function drawRankingPanel(centerY, panelRight, panelWidth) {
-    const list = cachedRanking;
+  //   dataList: 표시할 entry 배열
+  //   title: 헤더 문자열
+  //   rowH: 행 높이 (기본 20)
+  function drawRankingPanel(centerY, panelRight, panelWidth, dataList, title, rowH) {
+    rowH = rowH || 20;
+    // 어떤 경우에도 TOP N만 표시 (방어 코드)
+    const list = (dataList || []).slice(0, RANKING_MAX);
     const panelLeft = panelRight - panelWidth;
     const titleX = panelLeft + panelWidth/2;
 
     ctx.textAlign = 'center';
-    ctx.font = 'bold 20px sans-serif';
+    ctx.font = 'bold 18px sans-serif';
     ctx.fillStyle = '#ffcb6b';
-    ctx.fillText('— RANKING TOP ' + RANKING_MAX + ' —', titleX, centerY);
+    ctx.fillText(title || '— RANKING —', titleX, centerY);
 
-    const startY = centerY + 28;
-    const rowH = 22;
-    // 컬럼 X 좌표 (패널 내부, 좌측부터)
-    const colIdx = panelLeft + 14;
-    const colName = panelLeft + 50;
+    const startY = centerY + 24;
+    // 컬럼 X 좌표
+    const colIdx   = panelLeft + 14;
+    const colName  = panelLeft + 46;
     const colScore = panelRight - 80;
-    const colDist = panelRight - 12;
+    const colDist  = panelRight - 12;
 
-    ctx.font = '12px sans-serif';
+    ctx.font = '11px sans-serif';
     ctx.fillStyle = '#888';
     ctx.textAlign = 'left';
-    ctx.fillText('#',     colIdx,  startY - 8);
-    ctx.fillText('NAME',  colName, startY - 8);
+    ctx.fillText('#',     colIdx,  startY - 6);
+    ctx.fillText('NAME',  colName, startY - 6);
     ctx.textAlign = 'right';
-    ctx.fillText('SCORE', colScore, startY - 8);
-    ctx.fillText('DIST',  colDist,  startY - 8);
+    ctx.fillText('SCORE', colScore, startY - 6);
+    ctx.fillText('DIST',  colDist,  startY - 6);
 
-    ctx.font = 'bold 15px sans-serif';
+    ctx.font = 'bold 14px sans-serif';
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
-      const isMine = i === lastRankIndex;
-      ctx.fillStyle = isMine ? '#ff6b3d' : '#fff';
-      const y = startY + i * rowH + 12;
+      const mine = isCurrentEntry(e);
+      // 이번 점수는 더 밝은 강조색, 그 외는 흰색
+      ctx.fillStyle = mine ? '#ffe070' : '#fff';
+      const y = startY + i * rowH + 11;
       ctx.textAlign = 'left';
       ctx.fillText((i+1).toString().padStart(2, ' '), colIdx, y);
       ctx.fillText((e.name || 'PLAYER') + (e.cleared ? ' ★' : ''), colName, y);
       ctx.textAlign = 'right';
       ctx.fillText(e.score.toString(), colScore, y);
       ctx.fillText(e.distance + 'm', colDist, y);
+      // 강조 entry는 좌측에 작은 화살표
+      if (mine) {
+        ctx.fillStyle = '#ffe070';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('▶', panelLeft + 2, y);
+        ctx.font = 'bold 14px sans-serif';
+      }
     }
     if (list.length === 0) {
       ctx.fillStyle = '#888';
-      ctx.font = '14px sans-serif';
+      ctx.font = '13px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('(아직 기록 없음)', titleX, startY + 20);
+      ctx.fillText('(아직 기록 없음)', titleX, startY + 18);
     }
   }
 
@@ -1862,33 +1928,29 @@ const MOUNT_GAIT = {
     // 2) 우측 패널 정보 (모두 우측 정렬)
     const panelRight = W - 32;
     const panelWidth = 440;
-    const panelLeft = panelRight - panelWidth;
 
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'right';
 
-    // GAME OVER
-    ctx.font = 'bold 56px sans-serif';
+    ctx.font = 'bold 48px sans-serif';
     ctx.fillStyle = '#ff6b3d';
-    ctx.fillText('GAME OVER', panelRight, 100);
+    ctx.fillText('GAME OVER', panelRight, 80);
 
-    // 이유
-    ctx.font = '18px sans-serif';
+    ctx.font = '16px sans-serif';
     ctx.fillStyle = '#fff';
-    ctx.fillText(world.gameOverReason, panelRight, 132);
+    ctx.fillText(world.gameOverReason, panelRight, 108);
 
-    // 본인 점수
-    ctx.font = 'bold 26px sans-serif';
+    ctx.font = 'bold 24px sans-serif';
     ctx.fillStyle = '#ffcb6b';
-    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', panelRight, 175);
+    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', panelRight, 142);
 
-    // 거리
-    ctx.font = '15px sans-serif';
+    ctx.font = '14px sans-serif';
     ctx.fillStyle = '#ddd';
-    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm', panelRight, 200);
+    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm', panelRight, 164);
 
-    // 랭킹 패널 (우측 정렬)
-    drawRankingPanel(245, panelRight, panelWidth);
+    // 본인 역대 TOP 10 + 전체 TOP 10 두 패널
+    drawRankingPanel(200, panelRight, panelWidth, loadPersonalRanking(), '— 내 역대 TOP ' + RANKING_MAX + ' —', 20);
+    drawRankingPanel(480, panelRight, panelWidth, cachedRanking,         '— 전체 TOP ' + RANKING_MAX + ' —',   20);
   }
 
   function render() {
@@ -1962,23 +2024,23 @@ const MOUNT_GAIT = {
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'right';
 
-    // CLEAR! 큰 노란 글자
-    ctx.font = 'bold 80px sans-serif';
-    ctx.lineWidth = 8;
+    ctx.font = 'bold 64px sans-serif';
+    ctx.lineWidth = 7;
     ctx.strokeStyle = '#000';
-    ctx.strokeText('CLEAR!', panelRight, 100);
+    ctx.strokeText('CLEAR!', panelRight, 80);
     ctx.fillStyle = '#ffcb6b';
-    ctx.fillText('CLEAR!', panelRight, 100);
+    ctx.fillText('CLEAR!', panelRight, 80);
 
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 26px sans-serif';
-    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', panelRight, 145);
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillText((world.playerName || 'PLAYER') + ' : ' + Math.floor(world.score) + ' 점', panelRight, 116);
 
-    ctx.font = '15px sans-serif';
+    ctx.font = '14px sans-serif';
     ctx.fillStyle = '#ddd';
-    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm  |  모든 스테이지 클리어 ★', panelRight, 172);
+    ctx.fillText('거리: ' + Math.floor(world.distance) + 'm  |  모든 스테이지 클리어 ★', panelRight, 138);
 
-    drawRankingPanel(215, panelRight, panelWidth);
+    drawRankingPanel(180, panelRight, panelWidth, loadPersonalRanking(), '— 내 역대 TOP ' + RANKING_MAX + ' —', 20);
+    drawRankingPanel(460, panelRight, panelWidth, cachedRanking,         '— 전체 TOP ' + RANKING_MAX + ' —',   20);
   }
 
   // ===== HUD =====
