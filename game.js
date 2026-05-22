@@ -630,26 +630,35 @@ const MOUNT_GAIT = {
     if (hasFirebase()) cachedRanking = null;
     // 2) Cloud Function 호출 → 서버 검증 → 통과 시 DB 저장
     if (hasFirebase()) {
-      const sid = world.serverSessionId;
-      if (!sid) {
-        console.warn('[Firebase] 서버 세션 없음, 원격 등록 건너뜀');
-        return localIdx;
-      }
-      // 제출 직전 마지막 heartbeat 한 번 보내서 서버의 lastScore/lastDistance 최신화
-      //   final:true → 정기 heartbeat 직후 호출되어도 anti-flood 체크 통과
-      const finalHeartbeat = window.firebaseRanking.heartbeat
-        ? window.firebaseRanking.heartbeat(sid, entry.score, entry.distance, true).catch(() => {})
-        : Promise.resolve();
-      finalHeartbeat.then(() =>
-        window.firebaseRanking.submit(entry, sid)
-          .then(() => {
-            world.serverSessionId = null;   // 세션은 1회용
-            refreshRanking();
-          })
-          .catch((e) => {
-            console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e?.message || e);
-          })
-      );
+      // 세션이 아직 도착 안 했을 수 있으므로 최대 5초까지 대기 후 시도
+      const startedAt = Date.now();
+      const MAX_WAIT_MS = 5000;
+      const tryRemoteSubmit = () => {
+        const sid = world.serverSessionId;
+        if (!sid) {
+          if (Date.now() - startedAt > MAX_WAIT_MS) {
+            console.warn('[Firebase] 세션 발급 대기 시간 초과(5s) - 원격 등록 포기');
+            return;
+          }
+          setTimeout(tryRemoteSubmit, 200);
+          return;
+        }
+        // 제출 직전 마지막 heartbeat 한 번 (final:true → anti-flood 체크 스킵)
+        const finalHb = window.firebaseRanking.heartbeat
+          ? window.firebaseRanking.heartbeat(sid, entry.score, entry.distance, true).catch(() => {})
+          : Promise.resolve();
+        finalHb.then(() =>
+          window.firebaseRanking.submit(entry, sid)
+            .then(() => {
+              world.serverSessionId = null;
+              refreshRanking();
+            })
+            .catch((e) => {
+              console.warn('[Firebase] 랭킹 등록 거부 또는 실패:', e?.message || e);
+            })
+        );
+      };
+      tryRemoteSubmit();
     }
     return localIdx;
   }
