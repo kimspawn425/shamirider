@@ -561,8 +561,9 @@ const MOUNT_GAIT = {
   //   []    → 로드 완료, 데이터 없음
   //   [...] → 로드 완료, 데이터 있음
   let cachedRanking = null;
-  let lastRankIndex = -1; // 최근 점수의 랭킹 위치 (강조 표시용)
-  let lastSubmittedEntry = null; // 본인 점수 식별용
+  let cachedRankingError = null;     // 에러 상태 (null이 아니면 화면에 에러 메시지)
+  let lastRankIndex = -1;
+  let lastSubmittedEntry = null;
 
   // Firebase 가용성 체크
   function hasFirebase() {
@@ -570,10 +571,17 @@ const MOUNT_GAIT = {
   }
 
   // 원격(또는 로컬) 랭킹을 캐시에 갱신
-  async function refreshRanking() {
+  // Firebase 랭킹 로드 - 10초 타임아웃 + 실패 시 자동 재시도(최대 2회)
+  async function refreshRanking(retriesLeft) {
+    if (retriesLeft == null) retriesLeft = 2;
     if (hasFirebase()) {
+      cachedRankingError = null;
       try {
-        const remote = await window.firebaseRanking.load(RANKING_MAX);
+        const loadPromise = window.firebaseRanking.load(RANKING_MAX);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Firebase 응답 타임아웃 (10초)')), 10000)
+        );
+        const remote = await Promise.race([loadPromise, timeoutPromise]);
         cachedRanking = Array.isArray(remote) ? remote : [];
         if (lastSubmittedEntry) {
           lastRankIndex = cachedRanking.findIndex(
@@ -584,9 +592,16 @@ const MOUNT_GAIT = {
         }
         return;
       } catch (e) {
-        console.warn('[Firebase] 랭킹 로드 실패:', e);
-        // 실패 시에도 빈 배열로 두어 Loading 상태는 해제 (실패 표시는 화면에서 처리 가능)
+        const msg = e?.message || String(e);
+        console.warn('[Firebase] 랭킹 로드 실패:', msg);
+        if (retriesLeft > 0) {
+          console.warn('[Firebase] 2초 후 재시도... (' + retriesLeft + '회 남음)');
+          setTimeout(() => refreshRanking(retriesLeft - 1), 2000);
+          return;
+        }
+        // 재시도 다 소진 → 에러 상태로
         cachedRanking = [];
+        cachedRankingError = msg;
         return;
       }
     }
@@ -1905,6 +1920,20 @@ const MOUNT_GAIT = {
       return;
     }
 
+    // 전체 랭킹의 에러 상태 (cachedRanking이 빈 배열이고 에러 있음)
+    // 본인 역대 패널엔 영향 없음 (이 패널은 항상 로컬 데이터)
+    if (Array.isArray(dataList) && dataList.length === 0
+        && cachedRankingError && dataList === cachedRanking) {
+      ctx.fillStyle = '#ff8080';
+      ctx.font = '13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('⚠ 랭킹 불러오기 실패', titleX, startY + 18);
+      ctx.fillStyle = '#888';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(cachedRankingError.slice(0, 60), titleX, startY + 38);
+      return;
+    }
+
     // 어떤 경우에도 TOP N만 표시 (방어 코드)
     const list = (dataList || []).slice(0, RANKING_MAX);
     // 컬럼 X 좌표
@@ -2148,5 +2177,8 @@ const MOUNT_GAIT = {
   // Firebase 랭킹 초기 로드 (SDK 스크립트가 module이라 늦게 로드될 수 있어
   // 즉시 시도 + 1초 후 한 번 더 재시도)
   refreshRanking();
-  setTimeout(() => { if (cachedRanking.length === 0 || hasFirebase()) refreshRanking(); }, 1000);
+  setTimeout(() => {
+    // null 안전 + Firebase 가용 시 한 번 더 시도 (SDK 늦게 로드되는 경우)
+    if (cachedRanking === null || hasFirebase()) refreshRanking();
+  }, 1000);
 })();
