@@ -494,8 +494,25 @@ const MOUNT_GAIT = {
 
   // ===== 랭킹 시스템 (Firebase + localStorage 폴백) =====
   const RANKING_KEY = 'shamiRiderRanking';
+  const UID_KEY = 'shamiRiderUID';
   const RANKING_MAX = 10;            // 화면 표시용 (TOP N)
   const LOCAL_RANKING_MAX = 200;     // localStorage 용량 (본인 역대 기록 보존)
+
+  // 브라우저별 고유 ID (닉네임 변경에 영향 없음). 최초 1회 생성 후 영구 저장.
+  function getOrCreatePlayerUID() {
+    try {
+      let uid = localStorage.getItem(UID_KEY);
+      if (!uid) {
+        uid = 'u_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(UID_KEY, uid);
+      }
+      return uid;
+    } catch (e) {
+      // localStorage 사용 불가 환경 (쿠키 차단 등) → 세션 동안만 임시 UID
+      return 'u_temp_' + Date.now().toString(36);
+    }
+  }
+  const playerUID = getOrCreatePlayerUID();
 
   // 로컬(localStorage) 백업용
   function loadRankingLocal() {
@@ -509,18 +526,26 @@ const MOUNT_GAIT = {
     try { localStorage.setItem(RANKING_KEY, JSON.stringify(arr)); } catch (e) {}
   }
   function addToLocalRanking(entry) {
+    // 항상 현재 브라우저의 UID로 태깅 (닉네임이 바뀌어도 본인 식별 유지)
+    const tagged = { ...entry, uid: playerUID };
     const list = loadRankingLocal();
-    list.push(entry);
+    list.push(tagged);
     list.sort((a, b) => b.score - a.score);
     if (list.length > LOCAL_RANKING_MAX) list.length = LOCAL_RANKING_MAX;
     saveRankingLocal(list);
-    return list.indexOf(entry);
+    return list.indexOf(tagged);
   }
   // 현재 플레이어의 역대 TOP N (localStorage 기반)
+  // UID 기반 매칭 → 닉네임을 바꿔도 본인 기록 유지
+  // 구 데이터(uid 필드 없음)는 이름 일치 시 본인으로 간주 (마이그레이션)
   function loadPersonalRanking() {
     const all = loadRankingLocal();
     return all
-      .filter(e => e.name === world.playerName)
+      .filter(e => {
+        if (e.uid) return e.uid === playerUID;
+        // 호환: 이전에 저장된 uid 없는 entry는 이름으로 매칭
+        return e.name === world.playerName;
+      })
       .slice(0, RANKING_MAX);
   }
   // 이번 게임의 entry인지 식별 (date 기준 - 매번 고유)
