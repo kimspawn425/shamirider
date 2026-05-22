@@ -214,6 +214,7 @@
   // Cloud Function은 asia-southeast1 리전에 배포되어야 함 (index.js의 region과 일치)
   const functions = getFunctions(app, 'asia-southeast1');
   const startSessionFn = httpsCallable(functions, 'startSession');
+  const heartbeatFn    = httpsCallable(functions, 'heartbeat');
   const submitScoreFn  = httpsCallable(functions, 'submitScore');
 
   // game.js에서 사용할 수 있도록 window에 노출
@@ -222,6 +223,10 @@
     startSession: async () => {
       const result = await startSessionFn();
       return result?.data?.sessionId || null;
+    },
+    // Heartbeat - 게임 중 주기적 진행 보고
+    heartbeat: async (sessionId, score, distance) => {
+      return heartbeatFn({ sessionId, score, distance });
     },
     // 점수 제출 - 발급받은 sessionId 첨부 (playTime은 서버가 계산)
     submit: async (entry, sessionId) => {
