@@ -224,9 +224,9 @@
       const result = await startSessionFn();
       return result?.data?.sessionId || null;
     },
-    // Heartbeat - 게임 중 주기적 진행 보고
-    heartbeat: async (sessionId, score, distance) => {
-      return heartbeatFn({ sessionId, score, distance });
+    // Heartbeat - 게임 중 주기적 진행 보고 (final=true면 anti-flood 체크 스킵)
+    heartbeat: async (sessionId, score, distance, final) => {
+      return heartbeatFn({ sessionId, score, distance, final: !!final });
     },
     // 점수 제출 - 발급받은 sessionId 첨부 (playTime은 서버가 계산)
     submit: async (entry, sessionId) => {

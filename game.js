@@ -636,9 +636,9 @@ const MOUNT_GAIT = {
         return localIdx;
       }
       // 제출 직전 마지막 heartbeat 한 번 보내서 서버의 lastScore/lastDistance 최신화
-      // → submitScore의 "마지막 heartbeat 이후 너무 오래" 체크 통과
+      //   final:true → 정기 heartbeat 직후 호출되어도 anti-flood 체크 통과
       const finalHeartbeat = window.firebaseRanking.heartbeat
-        ? window.firebaseRanking.heartbeat(sid, entry.score, entry.distance).catch(() => {})
+        ? window.firebaseRanking.heartbeat(sid, entry.score, entry.distance, true).catch(() => {})
         : Promise.resolve();
       finalHeartbeat.then(() =>
         window.firebaseRanking.submit(entry, sid)
